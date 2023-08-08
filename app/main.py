@@ -13,28 +13,39 @@ def read_varint(file,n):
     ans = var & 0x7f
     n-=1
     while (var>>7) & 1:
-    #ans=0
-    #for var in bytes:
-        #print(var,(var>>7) & 1,bin(var))
         var = int.from_bytes(file.read(1), byteorder="big")
         ans = (ans<<7)+(var & 0x7f)
-        #print(var,(var>>7) & 1,bin(var))
         n-=1
-        #if not (var>>7):
-        #    break
-        #ans |= (var&0x7f) << shift
-        #shift +=6
     return ans,n
+
+class Database:
+    def __init__(self,database_file_path):
+        self.database_file_path = database_file_path
+        self.database_file = open(database_file_path, "rb")
+        self.database_file.seek(16)  # Skip the first 16 bytes of the header
+        self.page_size = int.from_bytes(self.database_file.read(2), byteorder="big")
+
+    def __del__(self):
+        self.database_file.close()
+
+    def get_page(self,num):
+        if num == 1:
+            self.database_file.seek(100)
+        else:
+            self.database_file.seek(self.paga_size*(num-1))
+        type,freeblock,num_cells,cell_start,num_fragment = unpack("!BHHHB",database_file.read(8))
+
+
+
+db = Database(database_file_path)
 
 if command == ".dbinfo":
     with open(database_file_path, "rb") as database_file:
         # You can use print statements as follows for debugging, they'll be visible when running tests.
         print("Logs from your program will appear here!")
 
-        # Uncomment this to pass the first stage
-        database_file.seek(16)  # Skip the first 16 bytes of the header
-        page_size = int.from_bytes(database_file.read(2), byteorder="big")
-        print(f"database page size: {page_size}")
+        # Uncomment this to pass the first stage        
+        print(f"database page size: {db.page_size}")
         database_file.seek(100)  # Skip the first 100 bytes of the header
         type,freeblock,num_cells,cell_start,num_fragment = unpack("!BHHHB",database_file.read(8))
         #type = int.from_bytes(database_file.read(1), byteorder="big")
