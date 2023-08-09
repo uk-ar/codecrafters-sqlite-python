@@ -82,6 +82,10 @@ if command == ".dbinfo":
     print(f"database page size: {db.page_size}")
     print(f"number of tables: {db.schema_table.num_cells}")
 elif command == ".tables":
+    for schema in db.schema_table.get_cells():
+        if schema[0]==b"table":
+                print(schema[2].decode('utf-8'))#table_name            
+    exit(0)
     with open(database_file_path, "rb") as database_file:
         database_file.seek(16)  # Skip the first 16 bytes of the header
         page_size = int.from_bytes(database_file.read(2), byteorder="big")
