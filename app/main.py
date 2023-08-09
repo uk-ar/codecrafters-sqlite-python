@@ -3,7 +3,7 @@ import sys
 from dataclasses import dataclass
 from struct import unpack
 
-# import sqlparse - available if you need it!
+import sqlparse # - available if you need it!
 
 database_file_path = sys.argv[1]
 command = sys.argv[2]
@@ -58,6 +58,7 @@ class Database:
         self.database_file.seek(16)  # Skip the first 16 bytes of the header
         self.page_size = int.from_bytes(self.database_file.read(2), byteorder="big")
         self.schema_table = self.get_page(1)
+        self.table_pages = self.table_pages(self.schema_table)
 
     def __del__(self):
         self.database_file.close()
@@ -70,6 +71,13 @@ class Database:
         page = Page(self.database_file)
         return page
 
+    def table_pages(self,schema_table):
+        pages = {}
+        for schema in schema_table.get_cells():
+            if schema and schema[0]==b"table":
+                pages[schema[2].decode('utf-8')]=int.from_bytes(schema[3],'big')
+        return pages        
+
 db = Database(database_file_path)
 
 if command == ".dbinfo":
@@ -80,16 +88,13 @@ if command == ".dbinfo":
     print(f"database page size: {db.page_size}")
     print(f"number of tables: {db.schema_table.num_cells}")
 elif command == ".tables":
-    for schema in db.schema_table.get_cells():
-        if schema[0]==b"table":
-                print(schema[2].decode('utf-8'))#table_name
+    for table in db.table_pages.keys():
+        print(table)
 elif command.startswith("select count(*) from "):
     table = command.split(" ")[-1]
-    page_num = -1
-    for schema in db.schema_table.get_cells():
-        if schema[0]==b"table" and schema[2].decode('utf-8')==table:
-            page_num = int.from_bytes(schema[3],'big')
+    page_num = db.table_pages[table]
     print(len(db.get_page(page_num).offsets))
-            
 else:
+    #statements = 
     print(f"Invalid command: {command}")
+
