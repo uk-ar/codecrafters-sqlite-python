@@ -66,7 +66,7 @@ class Database:
         if num == 1:
             self.database_file.seek(100)
         else:
-            self.database_file.seek(self.paga_size*(num-1))
+            self.database_file.seek(self.page_size*(num-1))
         page = Page(self.database_file)
         return page
 
@@ -83,5 +83,13 @@ elif command == ".tables":
     for schema in db.schema_table.get_cells():
         if schema[0]==b"table":
                 print(schema[2].decode('utf-8'))#table_name
+elif command.startswith("select count(*) from "):
+    table = command.split(" ")[-1]
+    page_num = -1
+    for schema in db.schema_table.get_cells():
+        if schema[0]==b"table" and schema[2].decode('utf-8')==table:
+            page_num = int.from_bytes(schema[3],'big')
+    print(len(db.get_page(page_num).offsets))
+            
 else:
     print(f"Invalid command: {command}")
