@@ -70,8 +70,6 @@ class Database:
         page = Page(self.database_file)
         return page
 
-
-
 db = Database(database_file_path)
 
 if command == ".dbinfo":
@@ -84,40 +82,6 @@ if command == ".dbinfo":
 elif command == ".tables":
     for schema in db.schema_table.get_cells():
         if schema[0]==b"table":
-                print(schema[2].decode('utf-8'))#table_name            
-    exit(0)
-    with open(database_file_path, "rb") as database_file:
-        database_file.seek(16)  # Skip the first 16 bytes of the header
-        page_size = int.from_bytes(database_file.read(2), byteorder="big")
-        #print(f"database page size: {page_size}")
-        database_file.seek(100)  # Skip the first 100 bytes of the header
-        type,freeblock,num_cells,cell_start,num_fragment = unpack("!BHHHB",database_file.read(8))
-        offsets = [int.from_bytes(database_file.read(2), byteorder="big") for _ in range(num_cells)]
-        for offset in offsets:
-            contents_sizes=[0,1,2,3,4,6,8,8,0,0]
-            database_file.seek(offset)
-            num_payload = int.from_bytes(database_file.read(1), byteorder="big")
-            row_id = int.from_bytes(database_file.read(1), byteorder="big")            
-            payload = num_payload-2 # for num_payload & row_id
-            num_bytes = int.from_bytes(database_file.read(1), byteorder="big")-1 # -1 for self
-            #print(hex(offset),num_payload,row_id,num_bytes)
-            sizes=[]
-            while num_bytes > 0:
-            #for _ in range(5):
-                type,num_bytes = read_varint(database_file,num_bytes)
-                #type = int.from_bytes(database_file.read(1), byteorder="big")
-                #print(type)
-                if type >= 13 and type%2:
-                    sizes.append((type-13)//2)
-                elif type>=12 and type%2==0:
-                    sizes.append((type-12)//2)
-                else:
-                    sizes.append(contents_sizes[type])
-                #content = int.from_bytes(database_file.read(contents_sizes[type]), byteorder="big")
-                #print(type,content)
-            # 0xf8f,0xf3d,0xec3
-            schema = [database_file.read(size) for size in sizes]
-            if schema[0]==b"table":
                 print(schema[2].decode('utf-8'))#table_name
 else:
     print(f"Invalid command: {command}")
