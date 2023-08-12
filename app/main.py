@@ -112,24 +112,30 @@ db = Database(database_file_path)
 
 if not command.startswith("."):
     statement = sqlparse.parse(command)[0]
-    columns = []
+    columns_token = []
     table = ""
     if statement[0].value.upper() == "SELECT":
-        columns = statement[2]
+        columns_token = statement[2]
         if statement[4].value.upper() == "FROM":
             table  = statement[6].value
     #print(db.tables,file=sys.stderr)
     #print(db.schema_table,file=sys.stderr)
     page_num = db.tables[table].rootpage
-    if columns.value == "count(*)":
+    if columns_token.value == "count(*)":
         print(len(db.get_page(page_num).offsets))
-    else:
-        #print(db.get_page(page_num).offsets)        
-        col = columns.value
-        #print(db.tables[table].columns)
-        idx = db.tables[table].columns[col]
+    elif type(columns_token)==sqlparse.sql.Identifier:
+        #print(type(columns_token))
+        #print(db.get_page(page_num).offsets)    
+        columns = columns_token.value
+        #print(db.tables[table].columns_token)
+        idx = db.tables[table].columns[columns]
         for cell in db.get_page(page_num).get_cells():
             print(cell[idx].decode("utf-8"))
+    elif type(columns_token)==sqlparse.sql.IdentifierList:
+        columns = [x.get_name() for x in columns_token.get_identifiers()]
+        # print(columns)
+        for cell in db.get_page(page_num).get_cells():
+            print("|".join([cell[db.tables[table].columns[column]].decode("utf-8") for column in columns]))
 elif command == ".dbinfo":
     # You can use print statements as follows for debugging, they'll be visible when running tests.
     print("Logs from your program will appear here!")
