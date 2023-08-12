@@ -1,43 +1,51 @@
 import sys
 
-from dataclasses import dataclass
+from dataclasses import dataclass,field
 from struct import unpack
-
+import io
 import sqlparse # - available if you need it!
 
 database_file_path = sys.argv[1]
 command = sys.argv[2]
 
-def read_varint(file,n):
+def read_varint(file):
     var = int.from_bytes(file.read(1), byteorder="big")
     ans = var & 0x7f
-    n-=1
+    n=1
     while (var>>7) & 1:
         var = int.from_bytes(file.read(1), byteorder="big")
         ans = (ans<<7)+(var & 0x7f)
-        n-=1
+        n+=1
     return ans,n
 
-#@dataclass
+@dataclass
 class Page:
-    def __init__(self,database_file,offset):        
-        self.database_file = database_file
-        self.offset = offset
-        self.type,self.freeblock,self.num_cells,self.cell_start,self.num_fragment = unpack("!BHHHB",database_file.read(8))
-        self.offsets = [int.from_bytes(database_file.read(2), byteorder="big")+offset for _ in range(self.num_cells)]
+    database_file: io.BufferedIOBase
+    offset: int
+    type : bytes = 0
+    num_cells : bytes = 0
+    cell_start : bytes = 0
+    num_fragment : bytes = 0
+    offsets: list=field(default_factory=list)
+    def __post_init__(self):
+        self.type,self.freeblock,self.num_cells,self.cell_start,self.num_fragment = unpack("!BHHHB",self.database_file.read(8))
+        self.offsets = [int.from_bytes(self.database_file.read(2), byteorder="big")+self.offset for _ in range(self.num_cells)]
     def get_cells(self):#iter
         contents_sizes=[0,1,2,3,4,6,8,8,0,0,0,0]
         cells = []
         for offset in self.offsets:            
             self.database_file.seek(offset)
-            num_payload = int.from_bytes(self.database_file.read(1), byteorder="big")
-            row_id = int.from_bytes(self.database_file.read(1), byteorder="big")            
+            num_payload,_ = read_varint(self.database_file)
+            #num_payload = int.from_bytes(self.database_file.read(1), byteorder="big")
+            row_id,_ = read_varint(self.database_file)
+            #row_id,_ = int.from_bytes(self.database_file.read(1), byteorder="big")            
             payload = num_payload-2 # for num_payload & row_id
             num_bytes = int.from_bytes(self.database_file.read(1), byteorder="big")-1 # -1 for self
-            #print(hex(offset),num_payload,row_id,num_bytes)
+            #print(hex(offset),num_payload,row_id,num_bytes,file=sys.stderr)
             sizes=[]
             while num_bytes > 0:
-                type,num_bytes = read_varint(self.database_file,num_bytes)
+                type,n = read_varint(self.database_file)
+                num_bytes -= n
                 #type = int.from_bytes(self.database_file.read(1), byteorder="big")
                 #print(type,num_bytes)
                 if type >= 13 and type%2:
@@ -52,15 +60,16 @@ class Page:
             cells.append([self.database_file.read(size) for size in sizes])
         return cells
 
+@dataclass
 class Table:
-    def __init__(self,type_,name,tbl_name,rootpage,sql):
-        self.type = type_
-        self.name = name
-        self.tbl_name = tbl_name
-        self.rootpage = rootpage
-        self.sql = sql
-        self.columns = {}
-        statement = sqlparse.parse(sql)[0]
+    type: str
+    name: str
+    tbl_name: str
+    rootpage: int
+    sql: str
+    columns: dict = field(default_factory=dict)
+    def __post_init__(self):
+        statement = sqlparse.parse(self.sql)[0]
         for i,token in enumerate(statement.tokens[-1].get_sublists()):
             if type(token) is sqlparse.sql.IdentifierList:
                 self.columns[[t.value for t in token.get_sublists()][-1]]=i
@@ -90,7 +99,7 @@ class Database:
     def get_tables(self,schema_table):
         pages = {} # tbl_name->root_page
         for schema in schema_table.get_cells():
-            if schema and schema[0]==b"table":
+            if schema: #and schema[0]==b"table":
                 pages[schema[2].decode('utf-8')] = Table(
                     schema[0].decode('utf-8'),
                     schema[1].decode('utf-8'),
@@ -109,8 +118,8 @@ if not command.startswith("."):
         columns = statement[2]
         if statement[4].value.upper() == "FROM":
             table  = statement[6].value
-    print(db.tables,file=sys.stderr)
-    print(db.schema_table,file=sys.stderr)
+    #print(db.tables,file=sys.stderr)
+    #print(db.schema_table,file=sys.stderr)
     page_num = db.tables[table].rootpage
     if columns.value == "count(*)":
         print(len(db.get_page(page_num).offsets))
