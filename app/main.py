@@ -6,7 +6,7 @@ import io
 import sqlparse  # - available if you need it!
 import operator
 
-database_file_path = sys.argv[1]
+database_path = sys.argv[1]
 command = sys.argv[2]
 
 
@@ -20,10 +20,48 @@ def read_varint(file):
         n += 1
     return ans, n
 
+class Database:
+    def __init__(self, database_path):
+        self.database_path = database_path
+        self.database = open(database_path, "rb")
+        self.database.seek(16)  # Skip the first 16 bytes of the header
+        self.page_size = int.from_bytes(
+            self.database.read(2), byteorder="big")
+        self.schema_table = self.get_page(1)
+        self.tables = self.get_tables(self.schema_table)
+
+    def __del__(self):
+        self.database.close()
+
+    def seek(self,size):
+        return self.database.seek(size)
+
+    def read(self,size):
+        return self.database.read(size)
+
+    def get_page(self, num):
+        if num == 1:
+            self.database.seek(100)
+        else:
+            self.database.seek(self.page_size*(num-1))
+        page = Page(self, self.page_size*(num-1))
+        return page
+
+    def get_tables(self, schema_table):
+        pages = {}  # tbl_name->root_page
+        for schema in schema_table.get_cells():
+            if schema:  # and schema[0]==b"table":
+                pages[schema[2]] = Table(
+                    schema[0],
+                    schema[1],
+                    schema[2],
+                    schema[3],
+                    schema[4])
+        return pages
 
 @dataclass
 class Page:
-    database_file: io.BufferedIOBase
+    database: Database
     offset: int
     type: bytes = 0
     num_cells: bytes = 0
@@ -34,10 +72,10 @@ class Page:
 
     def __post_init__(self):
         self.type, self.freeblock, self.num_cells, self.cell_start, self.num_fragment = unpack(
-            "!BHHHB", self.database_file.read(8))
+            "!BHHHB", self.database.read(8))
         if self.type == 0x2 or self.type == 0x5:
-            self.right_most = int.from_bytes(self.database_file.read(4), byteorder="big")
-        self.offsets = [int.from_bytes(self.database_file.read(
+            self.right_most = int.from_bytes(self.database.read(4), byteorder="big")
+        self.offsets = [int.from_bytes(self.database.read(
             2), byteorder="big")+self.offset for _ in range(self.num_cells)]
 
     def get_num_rows(self):
@@ -63,28 +101,28 @@ class Page:
     def get_cells_table_interior(self):  # iter
         cells = []
         for offset in self.offsets:
-            self.database_file.seek(offset)
-            left_page = int.from_bytes(self.database_file.read(4), byteorder="big")
-            row_id,_ = read_varint(self.database_file)
+            self.database.seek(offset)
+            left_page = int.from_bytes(self.database.read(4), byteorder="big")
+            row_id,_ = read_varint(self.database)
             cells.append([left_page,row_id])
         return cells
     def get_cells_table_leaf(self):  # iter
         contents_sizes = [0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0]
         cells = []
         for offset in self.offsets:
-            self.database_file.seek(offset)
-            num_payload, _ = read_varint(self.database_file)
-            row_id, _ = read_varint(self.database_file)
+            self.database.seek(offset)
+            num_payload, _ = read_varint(self.database)
+            row_id, _ = read_varint(self.database)
             payload = num_payload-2  # for num_payload & row_id
             # varint?
-            num_bytes,n  = read_varint(self.database_file)
+            num_bytes,n  = read_varint(self.database)
             num_bytes -= n
-            #num_bytes = int.from_bytes(self.database_file.read(
+            #num_bytes = int.from_bytes(self.database.read(
             #    1), byteorder="big")-1  # -1 for self
             print(hex(offset),num_payload,row_id,num_bytes,file=sys.stderr)
             types = []
             while num_bytes > 0:
-                type, n = read_varint(self.database_file)
+                type, n = read_varint(self.database)
                 num_bytes -= n
                 types.append(type)
             print(types,file=sys.stderr)
@@ -93,17 +131,17 @@ class Page:
                 size = 0
                 if type >= 13 and type % 2:
                     size = (type-13)//2
-                    cell.append(self.database_file.read(size).decode("utf-8"))
+                    cell.append(self.database.read(size).decode("utf-8"))
                 elif type >= 12 and type % 2 == 0:  # BLOB
                     size = (type-12)//2
-                    cell.append(self.database_file.read(size))
+                    cell.append(self.database.read(size))
                 elif type <= 6:
                     size = contents_sizes[type]
                     cell.append(int.from_bytes(
-                        self.database_file.read(size), byteorder="big"))
+                        self.database.read(size), byteorder="big"))
                 # elif type==7: # TODO:float
                 else:
-                    cell.append(self.database_file.read(size))
+                    cell.append(self.database.read(size))
                 # print(cell[-1])
             cells.append(cell)
         return cells
@@ -127,47 +165,8 @@ class Table:
                 self.columns[token.value] = i
 
 
-class Database:
-    def __init__(self, database_file_path):
-        self.database_file_path = database_file_path
-        self.database_file = open(database_file_path, "rb")
-        self.database_file.seek(16)  # Skip the first 16 bytes of the header
-        self.page_size = int.from_bytes(
-            self.database_file.read(2), byteorder="big")
-        self.schema_table = self.get_page(1)
-        self.tables = self.get_tables(self.schema_table)
 
-    def __del__(self):
-        self.database_file.close()
-
-    def seek(self,size):
-        return self.database_file.read(size)
-
-    def read(size):
-        return self.database_file.read(size)
-
-    def get_page(self, num):
-        if num == 1:
-            self.database_file.seek(100)
-        else:
-            self.database_file.seek(self.page_size*(num-1))
-        page = Page(self.database_file, self.page_size*(num-1))
-        return page
-
-    def get_tables(self, schema_table):
-        pages = {}  # tbl_name->root_page
-        for schema in schema_table.get_cells():
-            if schema:  # and schema[0]==b"table":
-                pages[schema[2]] = Table(
-                    schema[0],
-                    schema[1],
-                    schema[2],
-                    schema[3],
-                    schema[4])
-        return pages
-
-
-db = Database(database_file_path)
+db = Database(database_path)
 
 
 def print_token(token):
