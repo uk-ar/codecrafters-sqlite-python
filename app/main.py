@@ -1,64 +1,78 @@
 import sys
 
-from dataclasses import dataclass,field
+from dataclasses import dataclass, field
 from struct import unpack
 import io
-import sqlparse # - available if you need it!
+import sqlparse  # - available if you need it!
+import operator
 
 database_file_path = sys.argv[1]
 command = sys.argv[2]
 
+
 def read_varint(file):
     var = int.from_bytes(file.read(1), byteorder="big")
     ans = var & 0x7f
-    n=1
-    while (var>>7) & 1:
+    n = 1
+    while (var >> 7) & 1:
         var = int.from_bytes(file.read(1), byteorder="big")
-        ans = (ans<<7)+(var & 0x7f)
-        n+=1
-    return ans,n
+        ans = (ans << 7)+(var & 0x7f)
+        n += 1
+    return ans, n
+
 
 @dataclass
 class Page:
     database_file: io.BufferedIOBase
     offset: int
-    type : bytes = 0
-    num_cells : bytes = 0
-    cell_start : bytes = 0
-    num_fragment : bytes = 0
-    offsets: list=field(default_factory=list)
+    type: bytes = 0
+    num_cells: bytes = 0
+    cell_start: bytes = 0
+    num_fragment: bytes = 0
+    offsets: list = field(default_factory=list)
+
     def __post_init__(self):
-        self.type,self.freeblock,self.num_cells,self.cell_start,self.num_fragment = unpack("!BHHHB",self.database_file.read(8))
-        self.offsets = [int.from_bytes(self.database_file.read(2), byteorder="big")+self.offset for _ in range(self.num_cells)]
-    def get_cells(self):#iter
-        contents_sizes=[0,1,2,3,4,6,8,8,0,0,0,0]
+        self.type, self.freeblock, self.num_cells, self.cell_start, self.num_fragment = unpack(
+            "!BHHHB", self.database_file.read(8))
+        self.offsets = [int.from_bytes(self.database_file.read(
+            2), byteorder="big")+self.offset for _ in range(self.num_cells)]
+
+    def get_cells(self):  # iter
+        contents_sizes = [0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0]
         cells = []
-        for offset in self.offsets:            
+        for offset in self.offsets:
             self.database_file.seek(offset)
-            num_payload,_ = read_varint(self.database_file)
-            #num_payload = int.from_bytes(self.database_file.read(1), byteorder="big")
-            row_id,_ = read_varint(self.database_file)
-            #row_id,_ = int.from_bytes(self.database_file.read(1), byteorder="big")            
-            payload = num_payload-2 # for num_payload & row_id
-            num_bytes = int.from_bytes(self.database_file.read(1), byteorder="big")-1 # -1 for self
-            #print(hex(offset),num_payload,row_id,num_bytes,file=sys.stderr)
-            sizes=[]
+            num_payload, _ = read_varint(self.database_file)
+            row_id, _ = read_varint(self.database_file)
+            payload = num_payload-2  # for num_payload & row_id
+            # varint?
+            num_bytes = int.from_bytes(self.database_file.read(
+                1), byteorder="big")-1  # -1 for self
+            # print(hex(offset),num_payload,row_id,num_bytes,file=sys.stderr)
+            types = []
             while num_bytes > 0:
-                type,n = read_varint(self.database_file)
+                type, n = read_varint(self.database_file)
                 num_bytes -= n
-                #type = int.from_bytes(self.database_file.read(1), byteorder="big")
-                #print(type,num_bytes)
-                if type >= 13 and type%2:
-                    sizes.append((type-13)//2)
-                elif type>=12 and type%2==0:
-                    sizes.append((type-12)//2)
+                types.append(type)
+            cell = []
+            for type in types:
+                size = 0
+                if type >= 13 and type % 2:
+                    size = (type-13)//2
+                    cell.append(self.database_file.read(size).decode("utf-8"))
+                elif type >= 12 and type % 2 == 0:  # BLOB
+                    size = (type-12)//2
+                    cell.append(self.database_file.read(size))
+                elif type <= 6:
+                    size = contents_sizes[type]
+                    cell.append(int.from_bytes(
+                        self.database_file.read(size), byteorder="big"))
+                # elif type==7: # TODO:float
                 else:
-                    sizes.append(contents_sizes[type])
-                #content = int.from_bytes(self.database_file.read(contents_sizes[type]), byteorder="big")
-                #print(type,content)
-            # 0xf8f,0xf3d,0xec3
-            cells.append([self.database_file.read(size) for size in sizes])
+                    cell.append(self.database_file.read(size))
+            cells.append(cell)
         return cells
+
 
 @dataclass
 class Table:
@@ -68,47 +82,57 @@ class Table:
     rootpage: int
     sql: str
     columns: dict = field(default_factory=dict)
+
     def __post_init__(self):
         statement = sqlparse.parse(self.sql)[0]
-        for i,token in enumerate(statement.tokens[-1].get_sublists()):
+        for i, token in enumerate(statement.tokens[-1].get_sublists()):
             if type(token) is sqlparse.sql.IdentifierList:
-                self.columns[[t.value for t in token.get_sublists()][-1]]=i
+                self.columns[[t.value for t in token.get_sublists()][-1]] = i
             else:
-                self.columns[token.value]=i
+                self.columns[token.value] = i
+
 
 class Database:
-    def __init__(self,database_file_path):
+    def __init__(self, database_file_path):
         self.database_file_path = database_file_path
         self.database_file = open(database_file_path, "rb")
         self.database_file.seek(16)  # Skip the first 16 bytes of the header
-        self.page_size = int.from_bytes(self.database_file.read(2), byteorder="big")
+        self.page_size = int.from_bytes(
+            self.database_file.read(2), byteorder="big")
         self.schema_table = self.get_page(1)
         self.tables = self.get_tables(self.schema_table)
 
     def __del__(self):
         self.database_file.close()
 
-    def get_page(self,num):
+    def get_page(self, num):
         if num == 1:
             self.database_file.seek(100)
         else:
             self.database_file.seek(self.page_size*(num-1))
-        page = Page(self.database_file,self.page_size*(num-1))
+        page = Page(self.database_file, self.page_size*(num-1))
         return page
 
-    def get_tables(self,schema_table):
-        pages = {} # tbl_name->root_page
+    def get_tables(self, schema_table):
+        pages = {}  # tbl_name->root_page
         for schema in schema_table.get_cells():
-            if schema: #and schema[0]==b"table":
-                pages[schema[2].decode('utf-8')] = Table(
-                    schema[0].decode('utf-8'),
-                    schema[1].decode('utf-8'),
-                    schema[2].decode('utf-8'),
-                    int.from_bytes(schema[3],'big'),
-                    schema[4].decode('utf-8'))
+            if schema:  # and schema[0]==b"table":
+                pages[schema[2]] = Table(
+                    schema[0],
+                    schema[1],
+                    schema[2],
+                    schema[3],
+                    schema[4])
         return pages
 
+
 db = Database(database_file_path)
+
+
+def print_token(token):
+    print(f"{type(token)}:{token.ttype}:{token.value}")
+    [print_token(t) for t in token.get_sublists()] if token.is_group else None
+
 
 if not command.startswith("."):
     statement = sqlparse.parse(command)[0]
@@ -117,30 +141,48 @@ if not command.startswith("."):
     if statement[0].value.upper() == "SELECT":
         columns_token = statement[2]
         if statement[4].value.upper() == "FROM":
-            table  = statement[6].value
-    #print(db.tables,file=sys.stderr)
-    #print(db.schema_table,file=sys.stderr)
+            table = statement[6].value
+    # print(db.tables,file=sys.stderr)
+    # print(db.schema_table,file=sys.stderr)
     page_num = db.tables[table].rootpage
     if columns_token.value == "count(*)":
         print(len(db.get_page(page_num).offsets))
-    elif type(columns_token)==sqlparse.sql.Identifier:
-        #print(type(columns_token))
-        #print(db.get_page(page_num).offsets)    
-        columns = columns_token.value
-        #print(db.tables[table].columns_token)
-        idx = db.tables[table].columns[columns]
-        for cell in db.get_page(page_num).get_cells():
-            print(cell[idx].decode("utf-8"))
-    elif type(columns_token)==sqlparse.sql.IdentifierList:
+        exit(0)
+    columns = []
+    if type(columns_token) == sqlparse.sql.Identifier:
+        columns.append(columns_token.get_name())
+    else:
         columns = [x.get_name() for x in columns_token.get_identifiers()]
-        # print(columns)
-        for cell in db.get_page(page_num).get_cells():
-            print("|".join([cell[db.tables[table].columns[column]].decode("utf-8") for column in columns]))
+    idxs = [db.tables[table].columns[column] for column in columns]
+    rows = []
+    #if len(statement.tokens) >= 7:
+    #    [print(type(token), token.value, token.ttype)
+    #     for token in statement.tokens]
+    filter = []
+    ops = {"=": operator.eq}
+    if type(statement[-1]) == sqlparse.sql.Where:
+        for comparison in statement[-1].get_sublists():
+            filter.append(ops[comparison.tokens[2].value])
+            if type(comparison.left) == sqlparse.sql.Identifier:
+                filter.append(db.tables[table].columns[comparison.left.value])
+            if type(comparison.right) == sqlparse.sql.Token:
+                filter.append(comparison.right.value[1:-1])
+    for cell in db.get_page(page_num).get_cells():
+        if not filter:
+            rows.append([cell[idx] for idx in idxs])
+            continue
+        # print(filter)
+        # TODO: stack machine base eval
+        if filter[0](cell[filter[1]], filter[2]):
+            rows.append([cell[idx] for idx in idxs])
+        # [print_token(token) for token in statement.tokens]
+    for row in rows:
+        print("|".join(row))
 elif command == ".dbinfo":
     # You can use print statements as follows for debugging, they'll be visible when running tests.
     print("Logs from your program will appear here!")
 
-    # Uncomment this to pass the first stage 
+    # Uncomment this to pass the first stage
     print(f"database page size: {db.page_size}")
     print(f"number of tables: {db.schema_table.num_cells}")
 elif command == ".tables":
@@ -148,4 +190,3 @@ elif command == ".tables":
         print(table)
 else:
     print(f"Invalid command: {command}")
-
