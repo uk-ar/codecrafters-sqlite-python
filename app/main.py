@@ -29,15 +29,46 @@ class Page:
     num_cells: bytes = 0
     cell_start: bytes = 0
     num_fragment: bytes = 0
+    right_most: int = 0
     offsets: list = field(default_factory=list)
 
     def __post_init__(self):
         self.type, self.freeblock, self.num_cells, self.cell_start, self.num_fragment = unpack(
             "!BHHHB", self.database_file.read(8))
+        if self.type == 0x2 or self.type == 0x5:
+            self.right_most = int.from_bytes(self.database_file.read(4), byteorder="big")
         self.offsets = [int.from_bytes(self.database_file.read(
             2), byteorder="big")+self.offset for _ in range(self.num_cells)]
 
+    def get_num_rows(self):
+        if self.type == 0x0d:
+            return len(self.offsets)
+        elif self.type == 0x05:
+            ans = 0
+            for left_page,_ in self.get_cells_table_interior():
+                #page = Page(left_page)
+                #ans += page.get_num_rows()
+                pass
+            return ans
+        else:
+            raise ValueError("error!")
+
     def get_cells(self):  # iter
+        if self.type == 0x0d:
+            return self.get_cells_table_leaf()
+        elif self.type == 0x05:
+            return self.get_cells_table_interior()
+        else:
+            raise ValueError("error!")
+    def get_cells_table_interior(self):  # iter
+        cells = []
+        for offset in self.offsets:
+            self.database_file.seek(offset)
+            left_page = int.from_bytes(self.database_file.read(4), byteorder="big")
+            row_id,_ = read_varint(self.database_file)
+            cells.append([left_page,row_id])
+        return cells
+    def get_cells_table_leaf(self):  # iter
         contents_sizes = [0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0]
         cells = []
         for offset in self.offsets:
@@ -46,14 +77,17 @@ class Page:
             row_id, _ = read_varint(self.database_file)
             payload = num_payload-2  # for num_payload & row_id
             # varint?
-            num_bytes = int.from_bytes(self.database_file.read(
-                1), byteorder="big")-1  # -1 for self
-            # print(hex(offset),num_payload,row_id,num_bytes,file=sys.stderr)
+            num_bytes,n  = read_varint(self.database_file)
+            num_bytes -= n
+            #num_bytes = int.from_bytes(self.database_file.read(
+            #    1), byteorder="big")-1  # -1 for self
+            print(hex(offset),num_payload,row_id,num_bytes,file=sys.stderr)
             types = []
             while num_bytes > 0:
                 type, n = read_varint(self.database_file)
                 num_bytes -= n
                 types.append(type)
+            print(types,file=sys.stderr)
             cell = []
             for type in types:
                 size = 0
@@ -70,6 +104,7 @@ class Page:
                 # elif type==7: # TODO:float
                 else:
                     cell.append(self.database_file.read(size))
+                # print(cell[-1])
             cells.append(cell)
         return cells
 
@@ -104,6 +139,12 @@ class Database:
 
     def __del__(self):
         self.database_file.close()
+
+    def seek(self,size):
+        return self.database_file.read(size)
+
+    def read(size):
+        return self.database_file.read(size)
 
     def get_page(self, num):
         if num == 1:
@@ -142,11 +183,12 @@ if not command.startswith("."):
         columns_token = statement[2]
         if statement[4].value.upper() == "FROM":
             table = statement[6].value
-    # print(db.tables,file=sys.stderr)
-    # print(db.schema_table,file=sys.stderr)
+    print(db.tables,file=sys.stderr)
+    print(db.schema_table,file=sys.stderr)
     page_num = db.tables[table].rootpage
     if columns_token.value == "count(*)":
-        print(len(db.get_page(page_num).offsets))
+        print(db.get_page(page_num),file=sys.stderr)
+        print(db.get_page(page_num).get_num_rows())
         exit(0)
     columns = []
     if type(columns_token) == sqlparse.sql.Identifier:
