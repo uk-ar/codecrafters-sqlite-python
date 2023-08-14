@@ -27,7 +27,7 @@ class Database:
         self.page_size = int.from_bytes(
             self.database.read(2), byteorder="big")
         self.schema_table = self.get_page(1)
-        self.tables = self.get_tables(self.schema_table)
+        # self.tables = self.get_tables(self.schema_table)
 
     def __del__(self):
         self.database.close()
@@ -37,7 +37,7 @@ class Database:
 
     def read(self,size):
         return self.database.read(size)
-
+    
     def get_page(self, num):
         if num == 1:
             self.database.seek(100)
@@ -51,9 +51,14 @@ class Database:
         else:
             raise ValueError("error!")        
 
-    def get_tables(self, schema_table):
+    def get_table(self,tbl_name):
+        for schema in self.schema_table.get_cells():
+            if schema[2]==tbl_name:
+                return Table(*schema)
+
+    def get_tables(self):
         pages = {}  # tbl_name->root_page
-        for schema in schema_table.get_cells():
+        for schema in self.schema_table.get_cells():
             if schema:  # and schema[0]==b"table":
                 pages[schema[2]] = Table(
                     schema[0],
@@ -81,13 +86,6 @@ class TableInterior:
         self.right_most = int.from_bytes(self.database.read(4), byteorder="big")
         self.offsets = [int.from_bytes(self.database.read(
             2), byteorder="big")+self.offset for _ in range(self.num_cells)]
-
-    #def get_num_rows(self):
-    #    ans = 0
-    #    for left_page,_ in self.get_cells():
-    #        page = self.database.get_page(left_page)
-    #        ans += page.get_num_rows()
-    #    return ans
 
     def get_cells(self):  # iter
         cells = []
@@ -123,9 +121,6 @@ class TableLeaf:
         self.offsets = [int.from_bytes(self.database.read(
             2), byteorder="big")+self.offset for _ in range(self.num_cells)]
 
-    def get_num_rows(self):
-        return len(self.offsets)
-
     def get_rows(self):
         return self.get_cells()
 
@@ -140,15 +135,13 @@ class TableLeaf:
             # varint?
             num_bytes,n  = read_varint(self.database)
             num_bytes -= n
-            #num_bytes = int.from_bytes(self.database.read(
-            #    1), byteorder="big")-1  # -1 for self
-            print(hex(offset),num_payload,row_id,num_bytes,file=sys.stderr)
+            #print(hex(offset),num_payload,row_id,num_bytes,file=sys.stderr)
             types = []
             while num_bytes > 0:
                 type, n = read_varint(self.database)
                 num_bytes -= n
                 types.append(type)
-            print(types,file=sys.stderr)
+            #print(types,file=sys.stderr)
             cell = []
             for type in types:
                 size = 0
@@ -197,38 +190,37 @@ def print_token(token):
 if not command.startswith("."):
     statement = sqlparse.parse(command)[0]
     columns_token = []
-    table = ""
+    tbl_name = ""
     if statement[0].value.upper() == "SELECT":
         columns_token = statement[2]
         if statement[4].value.upper() == "FROM":
-            table = statement[6].value
-    print(db.tables,file=sys.stderr)
+            tbl_name = statement[6].value
+    print(db.get_tables(),file=sys.stderr)
     print(db.schema_table,file=sys.stderr)
-    page_num = db.tables[table].rootpage
+    page_num = db.get_table(tbl_name).rootpage
     if columns_token.value == "count(*)":
         print(db.get_page(page_num),file=sys.stderr)
-        print(db.get_page(page_num).get_num_rows())
+        print(len(db.get_page(page_num).get_rows()))
+        #print(db.get_page(page_num).get_rows(),file=sys.stderr)
         exit(0)
     columns = []
     if type(columns_token) == sqlparse.sql.Identifier:
         columns.append(columns_token.get_name())
     else:
         columns = [x.get_name() for x in columns_token.get_identifiers()]
-    idxs = [db.tables[table].columns[column] for column in columns]
+    idxs = [db.get_table(tbl_name).columns[column] for column in columns]
     rows = []
-    #if len(statement.tokens) >= 7:
-    #    [print(type(token), token.value, token.ttype)
-    #     for token in statement.tokens]
     filter = []
     ops = {"=": operator.eq}
     if type(statement[-1]) == sqlparse.sql.Where:
         for comparison in statement[-1].get_sublists():
             filter.append(ops[comparison.tokens[2].value])
             if type(comparison.left) == sqlparse.sql.Identifier:
-                filter.append(db.tables[table].columns[comparison.left.value])
+                filter.append(db.get_table(tbl_name).columns[comparison.left.value])
             if type(comparison.right) == sqlparse.sql.Token:
                 filter.append(comparison.right.value[1:-1])
-    for cell in db.get_page(page_num).get_cells():
+    #print(db.get_page(page_num).get_rows(),file=sys.stderr)
+    for cell in db.get_page(page_num).get_rows():
         if not filter:
             rows.append([cell[idx] for idx in idxs])
             continue
@@ -236,9 +228,9 @@ if not command.startswith("."):
         # TODO: stack machine base eval
         if filter[0](cell[filter[1]], filter[2]):
             rows.append([cell[idx] for idx in idxs])
-        # [print_token(token) for token in statement.tokens]
+    print(rows)
     for row in rows:
-        print("|".join(row))
+        print("|".join([str(cell) for cell in row]))
 elif command == ".dbinfo":
     # You can use print statements as follows for debugging, they'll be visible when running tests.
     print("Logs from your program will appear here!")
@@ -247,7 +239,7 @@ elif command == ".dbinfo":
     print(f"database page size: {db.page_size}")
     print(f"number of tables: {db.schema_table.num_cells}")
 elif command == ".tables":
-    for table in db.tables.keys():
-        print(table)
+    for tbl_name in db.get_tables().keys():
+        print(tbl_name)
 else:
     print(f"Invalid command: {command}")
