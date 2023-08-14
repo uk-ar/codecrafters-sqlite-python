@@ -220,15 +220,15 @@ if not command.startswith("."):
             if type(comparison.right) == sqlparse.sql.Token:
                 filter.append(comparison.right.value[1:-1])
     #print(db.get_page(page_num).get_rows(),file=sys.stderr)
-    for cell in db.get_page(page_num).get_rows():
+    for row in db.get_page(page_num).get_rows():
         if not filter:
-            rows.append([cell[idx] for idx in idxs])
+            rows.append([row[idx] for idx in idxs])
             continue
         # print(filter)
         # TODO: stack machine base eval
-        if filter[0](cell[filter[1]], filter[2]):
-            rows.append([cell[idx] for idx in idxs])
-    print(rows)
+        if filter[0](row[filter[1]], filter[2]):
+            rows.append([row[idx] for idx in idxs])
+    #print(rows)
     for row in rows:
         print("|".join([str(cell) for cell in row]))
 elif command == ".dbinfo":
