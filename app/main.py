@@ -70,6 +70,7 @@ class Database:
 
 @dataclass
 class TableInterior:
+    # table: Table
     database: Database
     type: bytes
     offset: int  
@@ -100,11 +101,12 @@ class TableInterior:
         ans = []
         for left_page,_ in self.get_cells():
             page = self.database.get_page(left_page)
-            ans.append(page.get_rows())
+            ans += page.get_rows()
         return ans
 
 @dataclass
 class TableLeaf:
+    # table : Table
     database: Database
     type: bytes
     offset: int
@@ -151,6 +153,9 @@ class TableLeaf:
                 elif type >= 12 and type % 2 == 0:  # BLOB
                     size = (type-12)//2
                     cell.append(self.database.read(size))
+                elif type == 0:
+                    cell.append(row_id)
+                    row_id += 1
                 elif type <= 6:
                     size = contents_sizes[type]
                     cell.append(int.from_bytes(        
@@ -197,10 +202,10 @@ if not command.startswith("."):
             tbl_name = statement[6].value
     print(db.get_tables(),file=sys.stderr)
     print(db.schema_table,file=sys.stderr)
-    page_num = db.get_table(tbl_name).rootpage
+    table = db.get_table(tbl_name)
     if columns_token.value == "count(*)":
-        print(db.get_page(page_num),file=sys.stderr)
-        print(len(db.get_page(page_num).get_rows()))
+        print(db.get_page(table.rootpage),file=sys.stderr)
+        print(len(db.get_page(table.rootpage).get_rows()))
         #print(db.get_page(page_num).get_rows(),file=sys.stderr)
         exit(0)
     columns = []
@@ -220,7 +225,7 @@ if not command.startswith("."):
             if type(comparison.right) == sqlparse.sql.Token:
                 filter.append(comparison.right.value[1:-1])
     #print(db.get_page(page_num).get_rows(),file=sys.stderr)
-    for row in db.get_page(page_num).get_rows():
+    for row in db.get_page(table.rootpage).get_rows():
         if not filter:
             rows.append([row[idx] for idx in idxs])
             continue
