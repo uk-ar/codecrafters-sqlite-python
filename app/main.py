@@ -82,12 +82,12 @@ class TableInterior:
         self.offsets = [int.from_bytes(self.database.read(
             2), byteorder="big")+self.offset for _ in range(self.num_cells)]
 
-    def get_num_rows(self):
-        ans = 0
-        for left_page,_ in self.get_cells_table_interior():
-            page = self.database.get_page(left_page)
-            ans += page.get_num_rows()
-        return ans
+    #def get_num_rows(self):
+    #    ans = 0
+    #    for left_page,_ in self.get_cells():
+    #        page = self.database.get_page(left_page)
+    #        ans += page.get_num_rows()
+    #    return ans
 
     def get_cells(self):  # iter
         cells = []
@@ -98,11 +98,18 @@ class TableInterior:
             cells.append([left_page,row_id])
         return cells
 
+    def get_rows(self):
+        ans = []
+        for left_page,_ in self.get_cells():
+            page = self.database.get_page(left_page)
+            ans.append(page.get_rows())
+        return ans
+
 @dataclass
 class TableLeaf:
     database: Database
     type: bytes
-    offset: int  
+    offset: int
     freeblock: bytes = 0
     num_cells: bytes = 0
     cell_start: bytes = 0
@@ -117,7 +124,10 @@ class TableLeaf:
             2), byteorder="big")+self.offset for _ in range(self.num_cells)]
 
     def get_num_rows(self):
-        return len(self.offsets)        
+        return len(self.offsets)
+
+    def get_rows(self):
+        return self.get_cells()
 
     def get_cells(self):  # iter
         contents_sizes = [0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0]
