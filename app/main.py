@@ -9,7 +9,6 @@ import operator
 database_path = sys.argv[1]
 command = sys.argv[2]
 
-
 def read_varint(file):
     var = int.from_bytes(file.read(1), byteorder="big")
     ans = var & 0x7f
@@ -44,8 +43,13 @@ class Database:
             self.database.seek(100)
         else:
             self.database.seek(self.page_size*(num-1))
-        page = Page(self, self.page_size*(num-1))
-        return page
+        type = int.from_bytes(self.database.read(1), byteorder="big")
+        if type == 0x0d:
+            return TableLeaf(self, type, self.page_size*(num-1))
+        elif type == 0x05:
+            return TableInterior(self, type, self.page_size*(num-1))
+        else:
+            raise ValueError("error!")        
 
     def get_tables(self, schema_table):
         pages = {}  # tbl_name->root_page
@@ -60,10 +64,11 @@ class Database:
         return pages
 
 @dataclass
-class Page:
+class TableInterior:
     database: Database
-    offset: int
-    type: bytes = 0
+    type: bytes
+    offset: int  
+    freeblock: bytes = 0
     num_cells: bytes = 0
     cell_start: bytes = 0
     num_fragment: bytes = 0
@@ -71,34 +76,20 @@ class Page:
     offsets: list = field(default_factory=list)
 
     def __post_init__(self):
-        self.type, self.freeblock, self.num_cells, self.cell_start, self.num_fragment = unpack(
-            "!BHHHB", self.database.read(8))
-        if self.type == 0x2 or self.type == 0x5:
-            self.right_most = int.from_bytes(self.database.read(4), byteorder="big")
+        self.freeblock, self.num_cells, self.cell_start, self.num_fragment = unpack(
+            "!HHHB", self.database.read(7))
+        self.right_most = int.from_bytes(self.database.read(4), byteorder="big")
         self.offsets = [int.from_bytes(self.database.read(
             2), byteorder="big")+self.offset for _ in range(self.num_cells)]
 
     def get_num_rows(self):
-        if self.type == 0x0d:
-            return len(self.offsets)
-        elif self.type == 0x05:
-            ans = 0
-            for left_page,_ in self.get_cells_table_interior():
-                #page = Page(left_page)
-                #ans += page.get_num_rows()
-                pass
-            return ans
-        else:
-            raise ValueError("error!")
+        ans = 0
+        for left_page,_ in self.get_cells_table_interior():
+            page = self.database.get_page(left_page)
+            ans += page.get_num_rows()
+        return ans
 
     def get_cells(self):  # iter
-        if self.type == 0x0d:
-            return self.get_cells_table_leaf()
-        elif self.type == 0x05:
-            return self.get_cells_table_interior()
-        else:
-            raise ValueError("error!")
-    def get_cells_table_interior(self):  # iter
         cells = []
         for offset in self.offsets:
             self.database.seek(offset)
@@ -106,7 +97,29 @@ class Page:
             row_id,_ = read_varint(self.database)
             cells.append([left_page,row_id])
         return cells
-    def get_cells_table_leaf(self):  # iter
+
+@dataclass
+class TableLeaf:
+    database: Database
+    type: bytes
+    offset: int  
+    freeblock: bytes = 0
+    num_cells: bytes = 0
+    cell_start: bytes = 0
+    num_fragment: bytes = 0
+    right_most: int = 0
+    offsets: list = field(default_factory=list)
+
+    def __post_init__(self):
+        self.freeblock, self.num_cells, self.cell_start, self.num_fragment = unpack(
+            "!HHHB", self.database.read(7))
+        self.offsets = [int.from_bytes(self.database.read(
+            2), byteorder="big")+self.offset for _ in range(self.num_cells)]
+
+    def get_num_rows(self):
+        return len(self.offsets)        
+
+    def get_cells(self):  # iter
         contents_sizes = [0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0]
         cells = []
         for offset in self.offsets:
@@ -137,7 +150,7 @@ class Page:
                     cell.append(self.database.read(size))
                 elif type <= 6:
                     size = contents_sizes[type]
-                    cell.append(int.from_bytes(
+                    cell.append(int.from_bytes(        
                         self.database.read(size), byteorder="big"))
                 # elif type==7: # TODO:float
                 else:
@@ -145,7 +158,6 @@ class Page:
                 # print(cell[-1])
             cells.append(cell)
         return cells
-
 
 @dataclass
 class Table:
@@ -163,8 +175,6 @@ class Table:
                 self.columns[[t.value for t in token.get_sublists()][-1]] = i
             else:
                 self.columns[token.value] = i
-
-
 
 db = Database(database_path)
 
