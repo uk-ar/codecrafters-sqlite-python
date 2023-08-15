@@ -64,21 +64,26 @@ class Database:
         return pages
 
 @dataclass
-class TableInterior:
-    # table: Table
+class Page:
     database: Database
     type: bytes
-    offset: int  
+    offset: int
     freeblock: bytes = 0
     num_cells: bytes = 0
     cell_start: bytes = 0
     num_fragment: bytes = 0
+    def __post_init__(self):
+        self.freeblock, self.num_cells, self.cell_start, self.num_fragment = unpack(
+            "!HHHB", self.database.read(7))
+
+@dataclass
+class TableInterior(Page):
+    # table: Table
     right_most: int = 0
     offsets: list = field(default_factory=list)
 
     def __post_init__(self):
-        self.freeblock, self.num_cells, self.cell_start, self.num_fragment = unpack(
-            "!HHHB", self.database.read(7))
+        super().__post_init__()
         self.right_most = int.from_bytes(self.database.read(4), byteorder="big")
         self.offsets = [int.from_bytes(self.database.read(
             2), byteorder="big")+self.offset for _ in range(self.num_cells)]
@@ -100,21 +105,12 @@ class TableInterior:
         return ans
 
 @dataclass
-class TableLeaf:
-    # table : Table
-    database: Database
-    type: bytes
-    offset: int
-    freeblock: bytes = 0
-    num_cells: bytes = 0
-    cell_start: bytes = 0
-    num_fragment: bytes = 0
+class TableLeaf(Page):
     right_most: int = 0
     offsets: list = field(default_factory=list)
 
     def __post_init__(self):
-        self.freeblock, self.num_cells, self.cell_start, self.num_fragment = unpack(
-            "!HHHB", self.database.read(7))
+        super().__post_init__()
         self.offsets = [int.from_bytes(self.database.read(
             2), byteorder="big")+self.offset for _ in range(self.num_cells)]
 
@@ -168,8 +164,10 @@ class Table:
     name: str
     tbl_name: str
     rootpage: int
-    sql: str
+    sql: str    
     columns: dict = field(default_factory=dict)
+    tbl_root: Page = None
+    idx_root: Page = None
 
     def __post_init__(self):
         statement = sqlparse.parse(self.sql)[0]
