@@ -165,8 +165,7 @@ class Table:
     tbl_name: str
     rootpage: int
     sql: str    
-    tbl_root: Page = None
-    idx_root: Page = None
+    root: Page = None
     columns: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -197,8 +196,8 @@ if not command.startswith("."):
     print(db.schema_table,file=sys.stderr)
     table = db.get_table(tbl_name)["table"]
     if columns_token.value == "count(*)":
-        print(db.get_page(table.rootpage),file=sys.stderr)
-        print(len(db.get_page(table.rootpage).get_rows()))
+        #print(table.root,file=sys.stderr)
+        print(len(table.root.get_rows()))
         #print(db.get_page(page_num).get_rows(),file=sys.stderr)
         exit(0)
     columns = []
@@ -218,7 +217,7 @@ if not command.startswith("."):
             if type(comparison.right) == sqlparse.sql.Token:
                 filter.append(comparison.right.value[1:-1])
     #print(db.get_page(page_num).get_rows(),file=sys.stderr)
-    for row in db.get_page(table.rootpage).get_rows():
+    for row in table.root.get_rows():
         if not filter:
             rows.append([row[idx] for idx in idxs])
             continue
