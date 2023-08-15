@@ -59,7 +59,7 @@ class Database:
         for type,name,tbl_name,rootpage,sql in self.schema_table.get_cells():
             if not tbl_name in pages:
                 pages[tbl_name]={}
-            pages[tbl_name][type] = Table(type,name,tbl_name,rootpage,sql)
+            pages[tbl_name][type] = Table(type,name,tbl_name,rootpage,sql,self.get_page(rootpage))
             # print(pages[name])
         return pages
 
@@ -165,9 +165,9 @@ class Table:
     tbl_name: str
     rootpage: int
     sql: str    
-    columns: dict = field(default_factory=dict)
     tbl_root: Page = None
     idx_root: Page = None
+    columns: dict = field(default_factory=dict)
 
     def __post_init__(self):
         statement = sqlparse.parse(self.sql)[0]
