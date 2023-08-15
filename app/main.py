@@ -52,20 +52,15 @@ class Database:
             raise ValueError("error!")        
 
     def get_table(self,tbl_name):
-        for schema in self.schema_table.get_cells():
-            if schema[2]==tbl_name:
-                return Table(*schema)
+        return self.get_tables()[tbl_name]
 
     def get_tables(self):
         pages = {}  # tbl_name->root_page
-        for schema in self.schema_table.get_cells():
-            if schema:  # and schema[0]==b"table":
-                pages[schema[2]] = Table(
-                    schema[0],
-                    schema[1],
-                    schema[2],
-                    schema[3],
-                    schema[4])
+        for type,name,tbl_name,rootpage,sql in self.schema_table.get_cells():
+            if not tbl_name in pages:
+                pages[tbl_name]={}
+            pages[tbl_name][type] = Table(type,name,tbl_name,rootpage,sql)
+            # print(pages[name])
         return pages
 
 @dataclass
@@ -202,7 +197,7 @@ if not command.startswith("."):
             tbl_name = statement[6].value
     print(db.get_tables(),file=sys.stderr)
     print(db.schema_table,file=sys.stderr)
-    table = db.get_table(tbl_name)
+    table = db.get_table(tbl_name)["table"]
     if columns_token.value == "count(*)":
         print(db.get_page(table.rootpage),file=sys.stderr)
         print(len(db.get_page(table.rootpage).get_rows()))
@@ -213,7 +208,7 @@ if not command.startswith("."):
         columns.append(columns_token.get_name())
     else:
         columns = [x.get_name() for x in columns_token.get_identifiers()]
-    idxs = [db.get_table(tbl_name).columns[column] for column in columns]
+    idxs = [db.get_table(tbl_name)["table"].columns[column] for column in columns]
     rows = []
     filter = []
     ops = {"=": operator.eq}
@@ -221,7 +216,7 @@ if not command.startswith("."):
         for comparison in statement[-1].get_sublists():
             filter.append(ops[comparison.tokens[2].value])
             if type(comparison.left) == sqlparse.sql.Identifier:
-                filter.append(db.get_table(tbl_name).columns[comparison.left.value])
+                filter.append(db.get_table(tbl_name)["table"].columns[comparison.left.value])
             if type(comparison.right) == sqlparse.sql.Token:
                 filter.append(comparison.right.value[1:-1])
     #print(db.get_page(page_num).get_rows(),file=sys.stderr)
