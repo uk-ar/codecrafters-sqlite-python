@@ -175,6 +175,9 @@ class Table:
                 self.columns[[t.value for t in token.get_sublists()][-1]] = i
             else:
                 self.columns[token.value] = i
+    
+    def get_rows(self):
+        return self.root.get_rows()
 
 db = Database(database_path)
 
@@ -197,15 +200,14 @@ if not command.startswith("."):
     table = db.get_table(tbl_name)["table"]
     if columns_token.value == "count(*)":
         #print(table.root,file=sys.stderr)
-        print(len(table.root.get_rows()))
-        #print(db.get_page(page_num).get_rows(),file=sys.stderr)
+        print(len(table.get_rows()))
         exit(0)
     columns = []
     if type(columns_token) == sqlparse.sql.Identifier:
         columns.append(columns_token.get_name())
     else:
         columns = [x.get_name() for x in columns_token.get_identifiers()]
-    idxs = [db.get_table(tbl_name)["table"].columns[column] for column in columns]
+    idxs = [table.columns[column] for column in columns]
     rows = []
     filter = []
     ops = {"=": operator.eq}
@@ -213,11 +215,11 @@ if not command.startswith("."):
         for comparison in statement[-1].get_sublists():
             filter.append(ops[comparison.tokens[2].value])
             if type(comparison.left) == sqlparse.sql.Identifier:
-                filter.append(db.get_table(tbl_name)["table"].columns[comparison.left.value])
+                filter.append(table.columns[comparison.left.value])
             if type(comparison.right) == sqlparse.sql.Token:
                 filter.append(comparison.right.value[1:-1])
     #print(db.get_page(page_num).get_rows(),file=sys.stderr)
-    for row in table.root.get_rows():
+    for row in table.get_rows():
         if not filter:
             rows.append([row[idx] for idx in idxs])
             continue
