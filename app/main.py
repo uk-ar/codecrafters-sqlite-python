@@ -166,7 +166,7 @@ class TableInterior(Page):
 
     def search(self,row_id):# row_id
         cells = self.get_cells()
-        # print(self,cells)
+        print(self,cells,row_id,file=sys.stderr)
         _,left_page = cells[bisect_left(cells,[row_id])]
         #_,left_page = cells[bisect_left(cells,row_id,key=lambda r: r[0])]
         # print(cells[index],index)
