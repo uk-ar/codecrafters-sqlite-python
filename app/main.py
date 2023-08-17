@@ -154,12 +154,12 @@ class TableInterior(Page):
             self.database.seek(offset)
             left_page = int.from_bytes(self.database.read(4), byteorder="big")
             row_id,_ = read_varint(self.database)
-            cells.append([left_page,row_id])
+            cells.append([row_id,left_page])
         return cells
 
     def get_rows(self):
         ans = []
-        for left_page,_ in self.get_cells():
+        for _,left_page in self.get_cells():
             page = self.database.get_page(left_page)
             ans += page.get_rows()
         return ans
@@ -167,7 +167,8 @@ class TableInterior(Page):
     def search(self,row_id):# row_id
         cells = self.get_cells()
         # print(self,cells)
-        left_page,_ = cells[bisect_left(cells,row_id,key=lambda r: r[1])]
+        _,left_page = cells[bisect_left(cells,[row_id])]
+        #_,left_page = cells[bisect_left(cells,row_id,key=lambda r: r[0])]
         # print(cells[index],index)
         return self.database.get_page(left_page).search(row_id)
 
@@ -186,7 +187,8 @@ class TableLeaf(Page):
     def search(self,row_id):
         cells = self.get_cells()
         # print(self,cells)
-        cell = cells[bisect_left(cells,row_id,key=lambda r: r[0])]
+        cell = cells[bisect_left(cells,[row_id])]
+        # cell = cells[bisect_left(cells,row_id,key=lambda r: r[0])]
         # print(cells[index],index)
         return cell
 
@@ -246,7 +248,8 @@ class IndexInterior(Page):
     def search(self,target):
         cells = self.get_cells()
         # print(self,cells)
-        _,_,left_page = cells[bisect_left(cells,target,key=lambda r: r[0])]
+        #_,_,left_page = cells[bisect_left(cells,target,key=lambda r: r[0])]
+        _,_,left_page = cells[bisect_left(cells,[target])]
         # print(cells[index],index)
         return self.database.get_page(left_page).search(target)
 
