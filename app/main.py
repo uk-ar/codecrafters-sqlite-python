@@ -79,8 +79,18 @@ class Page:
     def __post_init__(self):
         self.freeblock, self.num_cells, self.cell_start, self.num_fragment = unpack(
             "!HHHB", self.database.read(7))
-
-    def get_cell(self,types,row_id):
+        
+    def read_payload(self,row_id):
+        # payload
+        num_bytes,n  = read_varint(self.database)
+        num_bytes -= n
+        #print(hex(offset),num_payload,row_id,num_bytes,file=sys.stderr)
+        types = []
+        while num_bytes > 0:
+            type, n = read_varint(self.database)
+            num_bytes -= n
+            types.append(type)
+        #print(types,file=sys.stderr)
         contents_sizes = [0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0]
         cell = []
         for type in types:
@@ -155,18 +165,7 @@ class TableLeaf(Page):
             self.database.seek(offset)
             num_payload, _ = read_varint(self.database)
             row_id, _ = read_varint(self.database)
-            payload = num_payload-2  # for num_payload & row_id
-            # varint?
-            num_bytes,n  = read_varint(self.database)
-            num_bytes -= n
-            #print(hex(offset),num_payload,row_id,num_bytes,file=sys.stderr)
-            types = []
-            while num_bytes > 0:
-                type, n = read_varint(self.database)
-                num_bytes -= n
-                types.append(type)
-            #print(types,file=sys.stderr)
-            cells.append(self.get_cell(types,row_id))
+            cells.append(self.read_payload(row_id))
         return cells
 
 @dataclass
@@ -195,16 +194,7 @@ class IndexInterior(Page):
             self.database.seek(offset)
             left_page = int.from_bytes(self.database.read(4), byteorder="big")
             num_payload,_ = read_varint(self.database)
-            num_bytes,n  = read_varint(self.database)
-            num_bytes -= n
-            #print(hex(offset),num_payload,row_id,num_bytes,file=sys.stderr)
-            types = []
-            while num_bytes > 0:
-                type, n = read_varint(self.database)
-                num_bytes -= n
-                types.append(type)
-            print(types,file=sys.stderr)
-            cells.append({"left_page":left_page,"cell":self.get_cell(types,0)})
+            cells.append({"left_page":left_page,"cell":self.read_payload(0)})
         return cells
 
     def get_rows(self):
