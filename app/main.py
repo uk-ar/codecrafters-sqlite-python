@@ -67,13 +67,13 @@ class Database:
             self.database.seek(self.page_size*(num-1))
         type = int.from_bytes(self.database.read(1), byteorder="big")
         if type == 0x0d:
-            return TableLeaf(self, type, self.page_size*(num-1))
+            return TableLeaf(self, type, num, self.page_size*(num-1))
         elif type == 0x05:
-            return TableInterior(self, type, self.page_size*(num-1))
+            return TableInterior(self, type, num, self.page_size*(num-1))
         elif type == 0x02:
-            return IndexInterior(self, type, self.page_size*(num-1))
+            return IndexInterior(self, type, num, self.page_size*(num-1))
         elif type == 0x0a:
-            return IndexLeaf(self, type, self.page_size*(num-1))
+            return IndexLeaf(self, type, num, self.page_size*(num-1))
         else:
             raise ValueError("error!",type)
 
@@ -93,6 +93,7 @@ class Database:
 class Page:
     database: Database
     type: bytes
+    num: int
     offset: int
     freeblock: bytes = 0
     num_cells: bytes = 0
@@ -164,10 +165,11 @@ class TableInterior(Page):
             ans += page.get_rows()
         return ans
 
-    def search(self,row_id):# row_id
+    def search(self,row_id): # row_id
         cells = self.get_cells()
-        print(self,cells,row_id,file=sys.stderr)
-        _,left_page = cells[bisect_left(cells,[row_id])]
+        cells.append([sys.maxsize,self.right_most])
+        # print(self,cells,row_id,bisect_left(cells,[row_id]),file=sys.stderr)
+        _,left_page = cells[bisect_left(cells,[row_id],hi=len(cells))]
         #_,left_page = cells[bisect_left(cells,row_id,key=lambda r: r[0])]
         # print(cells[index],index)
         return self.database.get_page(left_page).search(row_id)
@@ -187,7 +189,9 @@ class TableLeaf(Page):
     def search(self,row_id):
         cells = self.get_cells()
         # print(self,cells)
-        cell = cells[bisect_left(cells,[row_id])]
+        # cell = cells[bisect_left(cells,[row_id])]
+        cell = cells[bisect_left(cells,[row_id],hi=len(cells)-1)]
+
         # cell = cells[bisect_left(cells,row_id,key=lambda r: r[0])]
         # print(cells[index],index)
         return cell
@@ -249,7 +253,9 @@ class IndexInterior(Page):
         cells = self.get_cells()
         # print(self,cells)
         #_,_,left_page = cells[bisect_left(cells,target,key=lambda r: r[0])]
-        _,_,left_page = cells[bisect_left(cells,[target])]
+        # _,_,left_page = cells[bisect_left(cells,[target])]
+        _,_,left_page = cells[bisect_left(cells,[target],hi=len(cells))]
+        
         # print(cells[index],index)
         return self.database.get_page(left_page).search(target)
 
@@ -306,7 +312,7 @@ def print_token(token):
     print(f"{type(token)}:{token.ttype}:{token.value}:{token.get_name()}")
     [print_token(t) for t in token.get_sublists()] if token.is_group else None
 
-
+print(command,file=sys.stderr)
 if not command.startswith("."):
     statement = sqlparse.parse(command)[0]
     columns_token = []
@@ -343,14 +349,15 @@ if not command.startswith("."):
     #print(db.get_page(page_num).get_rows(),file=sys.stderr)
     rows = []
     if index:
-        row_ids = index.root.search(filter[2])        
+        row_ids = index.root.search(filter[2])
+        # print(row_ids,file=sys.stderr)
         rows = [table.root.search(row_id) for row_id in row_ids]
+        # print(rows,file=sys.stderr)
     else:
-        rows = table.get_rows()
-    #print(idxs)
+        rows = table.get_rows()        
     filtered_rows = []
     for row in rows:
-        if not filter:
+        if index or (not filter):
             filtered_rows.append([row[idx] for idx in idxs])
             continue
         # print(filter)
