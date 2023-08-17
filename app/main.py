@@ -48,8 +48,12 @@ class Database:
             return TableLeaf(self, type, self.page_size*(num-1))
         elif type == 0x05:
             return TableInterior(self, type, self.page_size*(num-1))
+        elif type == 0x02:
+            return IndexInterior(self, type, self.page_size*(num-1))
+        elif type == 0x0a:
+            return IndexLeaf(self, type, self.page_size*(num-1))
         else:
-            raise ValueError("error!")        
+            raise ValueError("error!",type)
 
     def get_table(self,tbl_name):
         return self.get_tables()[tbl_name]
@@ -75,6 +79,30 @@ class Page:
     def __post_init__(self):
         self.freeblock, self.num_cells, self.cell_start, self.num_fragment = unpack(
             "!HHHB", self.database.read(7))
+
+    def get_cell(self,types,row_id):
+        contents_sizes = [0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0]
+        cell = []
+        for type in types:
+            size = 0
+            if type >= 13 and type % 2:
+                size = (type-13)//2
+                cell.append(self.database.read(size).decode("utf-8"))
+            elif type >= 12 and type % 2 == 0:  # BLOB
+                size = (type-12)//2
+                cell.append(self.database.read(size))
+            elif type == 0:
+                cell.append(row_id)
+                row_id += 1
+            elif type <= 6:
+                size = contents_sizes[type]
+                cell.append(int.from_bytes(        
+                    self.database.read(size), byteorder="big"))
+            # elif type==7: # TODO:float
+            else:
+                cell.append(self.database.read(size))
+            # print(cell[-1])
+        return cell
 
 @dataclass
 class TableInterior(Page):
@@ -118,9 +146,12 @@ class TableLeaf(Page):
         return self.get_cells()
 
     def get_cells(self):  # iter
-        contents_sizes = [0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0]
         cells = []
         for offset in self.offsets:
+            # A varint which is the total number of bytes of payload, including any overflow
+            # A varint which is the integer key, a.k.a. "rowid"
+            # The initial portion of the payload that does not spill to overflow pages.
+            # A 4-byte big-endian integer page number for the first page of the overflow page list - omitted if all payload fits on the b-tree page.
             self.database.seek(offset)
             num_payload, _ = read_varint(self.database)
             row_id, _ = read_varint(self.database)
@@ -135,28 +166,53 @@ class TableLeaf(Page):
                 num_bytes -= n
                 types.append(type)
             #print(types,file=sys.stderr)
-            cell = []
-            for type in types:
-                size = 0
-                if type >= 13 and type % 2:
-                    size = (type-13)//2
-                    cell.append(self.database.read(size).decode("utf-8"))
-                elif type >= 12 and type % 2 == 0:  # BLOB
-                    size = (type-12)//2
-                    cell.append(self.database.read(size))
-                elif type == 0:
-                    cell.append(row_id)
-                    row_id += 1
-                elif type <= 6:
-                    size = contents_sizes[type]
-                    cell.append(int.from_bytes(        
-                        self.database.read(size), byteorder="big"))
-                # elif type==7: # TODO:float
-                else:
-                    cell.append(self.database.read(size))
-                # print(cell[-1])
-            cells.append(cell)
+            cells.append(self.get_cell(types,row_id))
         return cells
+
+@dataclass
+class IndexInterior(Page):
+    # table: Table
+    right_most: int = 0
+    offsets: list = field(default_factory=list)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.right_most = int.from_bytes(self.database.read(4), byteorder="big")
+        self.offsets = [int.from_bytes(self.database.read(
+            2), byteorder="big")+self.offset for _ in range(self.num_cells)]
+
+    def search(self,key):
+        pass        
+
+    def get_cells(self):  # iter
+        contents_sizes = [0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0]
+        cells = []
+        for offset in self.offsets:
+            # A 4-byte big-endian page number which is the left child pointer.
+            # A varint which is the total number of bytes of key payload, including any overflow
+            # The initial portion of the payload that does not spill to overflow pages.
+            # A 4-byte big-endian integer page number for the first page of the overflow page list - omitted if all payload fits on the b-tree page.
+            self.database.seek(offset)
+            left_page = int.from_bytes(self.database.read(4), byteorder="big")
+            num_payload,_ = read_varint(self.database)
+            num_bytes,n  = read_varint(self.database)
+            num_bytes -= n
+            #print(hex(offset),num_payload,row_id,num_bytes,file=sys.stderr)
+            types = []
+            while num_bytes > 0:
+                type, n = read_varint(self.database)
+                num_bytes -= n
+                types.append(type)
+            print(types,file=sys.stderr)
+            cells.append({"left_page":left_page,"cell":self.get_cell(types,0)})
+        return cells
+
+    def get_rows(self):
+        ans = []
+        for left_page,_ in self.get_cells():
+            page = self.database.get_page(left_page)
+            ans += page.get_rows()
+        return ans
 
 @dataclass
 class Table:
@@ -198,6 +254,7 @@ if not command.startswith("."):
     print(db.get_tables(),file=sys.stderr)
     print(db.schema_table,file=sys.stderr)
     table = db.get_table(tbl_name)["table"]
+    index = db.get_table(tbl_name)["index"] if "index" in db.get_table(tbl_name) else None
     if columns_token.value == "count(*)":
         #print(table.root,file=sys.stderr)
         print(len(table.get_rows()))
@@ -210,7 +267,7 @@ if not command.startswith("."):
     idxs = [table.columns[column] for column in columns]
     rows = []
     filter = []
-    ops = {"=": operator.eq}
+    ops = {"=": operator.eq}    
     if type(statement[-1]) == sqlparse.sql.Where:
         for comparison in statement[-1].get_sublists():
             filter.append(ops[comparison.tokens[2].value])
@@ -219,6 +276,18 @@ if not command.startswith("."):
             if type(comparison.right) == sqlparse.sql.Token:
                 filter.append(comparison.right.value[1:-1])
     #print(db.get_page(page_num).get_rows(),file=sys.stderr)
+    if index:
+        print(index)
+        print(index.root)
+        print(index.root.get_cells())
+        page = index.root.get_cells()[0]["left_page"]
+        p = db.get_page(page)
+        print(p)
+        print(p.get_cells())
+        # page = index.root.get_cells()[0][1]
+        # print(db.get_page(page).get_cells())
+        # print(index.get_rows())
+        exit(0)
     for row in table.get_rows():
         if not filter:
             rows.append([row[idx] for idx in idxs])
