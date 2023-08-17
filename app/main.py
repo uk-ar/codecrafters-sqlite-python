@@ -7,6 +7,27 @@ import sqlparse  # - available if you need it!
 import operator
 from bisect import *
 
+import sqlparse
+from sqlparse import keywords
+from sqlparse.lexer import Lexer
+
+# get the lexer singleton object to configure it
+lex = Lexer.get_default_instance()
+
+# Clear the default configurations.
+# After this call, reg-exps and keyword dictionaries need to be loaded
+# to make the lexer functional again.
+lex.clear()
+
+lex.set_SQL_REGEX(keywords.SQL_REGEX)
+lex.add_keywords(keywords.KEYWORDS_COMMON)
+lex.add_keywords(keywords.KEYWORDS_ORACLE)
+lex.add_keywords(keywords.KEYWORDS_PLPGSQL)
+lex.add_keywords(keywords.KEYWORDS_HQL)
+lex.add_keywords(keywords.KEYWORDS_MSACCESS)
+del keywords.KEYWORDS["DOMAIN"]
+lex.add_keywords(keywords.KEYWORDS) #remove domain keyword
+
 database_path = sys.argv[1]
 command = sys.argv[2]
 
@@ -143,6 +164,13 @@ class TableInterior(Page):
             ans += page.get_rows()
         return ans
 
+    def search(self,row_id):# row_id
+        cells = self.get_cells()
+        # print(self,cells)
+        left_page,_ = cells[bisect_left(cells,row_id,key=lambda r: r[1])]
+        # print(cells[index],index)
+        return self.database.get_page(left_page).search(row_id)
+
 @dataclass
 class TableLeaf(Page):
     offsets: list = field(default_factory=list)
@@ -155,7 +183,14 @@ class TableLeaf(Page):
     def get_rows(self):
         return self.get_cells()
 
-    def get_cells(self):  # iter
+    def search(self,row_id):
+        cells = self.get_cells()
+        # print(self,cells)
+        cell = cells[bisect_left(cells,row_id,key=lambda r: r[0])]
+        # print(cells[index],index)
+        return cell
+
+    def get_cells(self):  #TODO:iter
         cells = []
         for offset in self.offsets:
             # A varint which is the total number of bytes of payload, including any overflow
@@ -208,12 +243,12 @@ class IndexInterior(Page):
         self.offsets = [int.from_bytes(self.database.read(
             2), byteorder="big")+self.offset for _ in range(self.num_cells)]
 
-    def search(self,target):        
+    def search(self,target):
         cells = self.get_cells()
         # print(self,cells)
-        index = bisect_left(cells,target,key=lambda r: r[0])
+        _,_,left_page = cells[bisect_left(cells,target,key=lambda r: r[0])]
         # print(cells[index],index)
-        return self.database.get_page(cells[index][2]).search(target)
+        return self.database.get_page(left_page).search(target)
 
     def get_cells(self):  # iter
         cells = []
@@ -248,9 +283,12 @@ class Table:
     columns: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        statement = sqlparse.parse(self.sql)[0]
+        statement = sqlparse.parse(self.sql.replace("autoincrement","").replace("primary key","").replace("\n",""))[0]
+        #print_token(statement)
         for i, token in enumerate(statement.tokens[-1].get_sublists()):
             if type(token) is sqlparse.sql.IdentifierList:
+                #print(token.tokens)
+                #print([t0 for t0 in token.get_identifiers()])
                 self.columns[[t.value for t in token.get_sublists()][-1]] = i
             else:
                 self.columns[token.value] = i
@@ -262,7 +300,7 @@ db = Database(database_path)
 
 
 def print_token(token):
-    print(f"{type(token)}:{token.ttype}:{token.value}")
+    print(f"{type(token)}:{token.ttype}:{token.value}:{token.get_name()}")
     [print_token(t) for t in token.get_sublists()] if token.is_group else None
 
 
@@ -283,12 +321,13 @@ if not command.startswith("."):
         print(len(table.get_rows()))
         exit(0)
     columns = []
+    
     if type(columns_token) == sqlparse.sql.Identifier:
         columns.append(columns_token.get_name())
     else:
         columns = [x.get_name() for x in columns_token.get_identifiers()]
     idxs = [table.columns[column] for column in columns]
-    rows = []
+    
     filter = []
     ops = {"=": operator.eq}    
     if type(statement[-1]) == sqlparse.sql.Where:
@@ -299,29 +338,26 @@ if not command.startswith("."):
             if type(comparison.right) == sqlparse.sql.Token:
                 filter.append(comparison.right.value[1:-1])
     #print(db.get_page(page_num).get_rows(),file=sys.stderr)
+    rows = []
     if index:
-        #print(index)
-        #print(index.root)
-        #print(index.root.get_cells())
-        #page = index.root.get_cells()[0]["left_page"]
-        #p = db.get_page(page)
-        #print(p)
-        #print(p.get_cells())
-        print(index.root.search(filter[2]))
-        # page = index.root.get_cells()[0][1]
-        # print(db.get_page(page).get_cells())
-        # print(index.get_rows())
-        exit(0)
-    for row in table.get_rows():
+        row_ids = index.root.search(filter[2])        
+        rows = [table.root.search(row_id) for row_id in row_ids]
+    else:
+        rows = table.get_rows()
+    #print(idxs)
+    filtered_rows = []
+    for row in rows:
         if not filter:
-            rows.append([row[idx] for idx in idxs])
+            filtered_rows.append([row[idx] for idx in idxs])
             continue
         # print(filter)
         # TODO: stack machine base eval
+        # print(filter)
         if filter[0](row[filter[1]], filter[2]):
-            rows.append([row[idx] for idx in idxs])
+            filtered_rows.append([row[idx] for idx in idxs])
     #print(rows)
-    for row in rows:
+    # print(filtered_rows,rows)
+    for row in filtered_rows:
         print("|".join([str(cell) for cell in row]))
 elif command == ".dbinfo":
     # You can use print statements as follows for debugging, they'll be visible when running tests.
