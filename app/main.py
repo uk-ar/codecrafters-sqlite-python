@@ -5,6 +5,7 @@ from struct import unpack
 import io
 import sqlparse  # - available if you need it!
 import operator
+from bisect import *
 
 database_path = sys.argv[1]
 command = sys.argv[2]
@@ -144,7 +145,6 @@ class TableInterior(Page):
 
 @dataclass
 class TableLeaf(Page):
-    right_most: int = 0
     offsets: list = field(default_factory=list)
 
     def __post_init__(self):
@@ -169,6 +169,34 @@ class TableLeaf(Page):
         return cells
 
 @dataclass
+class IndexLeaf(Page):
+    offsets: list = field(default_factory=list)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.offsets = [int.from_bytes(self.database.read(
+            2), byteorder="big")+self.offset for _ in range(self.num_cells)]
+
+    #def get_rows(self):
+    #    return self.get_cells()
+
+    def get_cells(self):  # iter
+        cells = []
+        for offset in self.offsets:
+            self.database.seek(offset)
+            num_payload, _ = read_varint(self.database)
+            cells.append(self.read_payload(0))
+        return cells
+    
+    def search(self,target):
+        row_ids=[]
+        for key,row_id in self.get_cells():
+            # print(key,row_id)
+            if key == target:
+                row_ids.append(row_id)
+        return row_ids
+
+@dataclass
 class IndexInterior(Page):
     # table: Table
     right_most: int = 0
@@ -180,11 +208,14 @@ class IndexInterior(Page):
         self.offsets = [int.from_bytes(self.database.read(
             2), byteorder="big")+self.offset for _ in range(self.num_cells)]
 
-    def search(self,key):
-        pass        
+    def search(self,target):        
+        cells = self.get_cells()
+        # print(self,cells)
+        index = bisect_left(cells,target,key=lambda r: r[0])
+        # print(cells[index],index)
+        return self.database.get_page(cells[index][2]).search(target)
 
     def get_cells(self):  # iter
-        contents_sizes = [0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0]
         cells = []
         for offset in self.offsets:
             # A 4-byte big-endian page number which is the left child pointer.
@@ -194,15 +225,17 @@ class IndexInterior(Page):
             self.database.seek(offset)
             left_page = int.from_bytes(self.database.read(4), byteorder="big")
             num_payload,_ = read_varint(self.database)
-            cells.append({"left_page":left_page,"cell":self.read_payload(0)})
+            cell = self.read_payload(0)
+            cell.append(left_page)
+            cells.append(cell)
         return cells
 
-    def get_rows(self):
-        ans = []
-        for left_page,_ in self.get_cells():
-            page = self.database.get_page(left_page)
-            ans += page.get_rows()
-        return ans
+    #def get_rows(self):
+    #    ans = []
+    #    for left_page,_ in self.get_cells():
+    #        page = self.database.get_page(left_page)
+    #        ans += page.get_rows()
+    #   return ans
 
 @dataclass
 class Table:
@@ -267,13 +300,14 @@ if not command.startswith("."):
                 filter.append(comparison.right.value[1:-1])
     #print(db.get_page(page_num).get_rows(),file=sys.stderr)
     if index:
-        print(index)
-        print(index.root)
-        print(index.root.get_cells())
-        page = index.root.get_cells()[0]["left_page"]
-        p = db.get_page(page)
-        print(p)
-        print(p.get_cells())
+        #print(index)
+        #print(index.root)
+        #print(index.root.get_cells())
+        #page = index.root.get_cells()[0]["left_page"]
+        #p = db.get_page(page)
+        #print(p)
+        #print(p.get_cells())
+        print(index.root.search(filter[2]))
         # page = index.root.get_cells()[0][1]
         # print(db.get_page(page).get_cells())
         # print(index.get_rows())
